@@ -1,2 +1,3 @@
-codigo,nombre,categoria,precio,descripcion,talles,colores,stock,imagen,etiqueta
-GD-001,Remera deportiva,Hombre,25000,Remera liviana para entrenar,"S, M, L, XL","Negro, Azul",10,https://ejemplo.com/remera.jpg,Novedad
+codigo,nombre,categoria,precio,descripcion,talle,color,stock,imagen,etiqueta
+GD-REM-M-NEGRO,Remera deportiva,Hombre,25000,Remera liviana para entrenar,M,Negro,3,https://ejemplo.com/remera-negra.jpg,Novedad
+GD-REM-L-AZUL,Remera deportiva,Hombre,25000,Remera liviana para entrenar,L,Azul,2,https://ejemplo.com/remera-azul.jpg,Novedad
