@@ -8,6 +8,8 @@ async function ensure(sql) {
     sizes TEXT NOT NULL DEFAULT '', colors TEXT NOT NULL DEFAULT '', stock INTEGER NOT NULL DEFAULT 0,
     image TEXT NOT NULL DEFAULT '', tag TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`;
+  await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS code TEXT NOT NULL DEFAULT ''`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS products_code_unique ON products(code) WHERE code<>''`;
   await sql`CREATE TABLE IF NOT EXISTS admin_audit(id BIGSERIAL PRIMARY KEY,actor TEXT NOT NULL,action TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',created_at TIMESTAMPTZ DEFAULT NOW())`;
 }
 module.exports = async function handler(req, res) {
@@ -15,7 +17,7 @@ module.exports = async function handler(req, res) {
   try {
     const sql = db(); await ensure(sql);
     if (req.method === 'GET') {
-      const rows = await sql`SELECT id, name, category, price, description, sizes, colors, stock, image, tag FROM products ORDER BY updated_at DESC, id DESC`;
+      const rows = await sql`SELECT id, code, name, category, price, description, sizes, colors, stock, image, tag FROM products ORDER BY updated_at DESC, id DESC`;
       return res.status(200).json({ products: rows });
     }
     if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
@@ -27,9 +29,10 @@ module.exports = async function handler(req, res) {
       const name = String(p.name || '').trim(); const category = String(p.category || '').trim();
       const price = Number(p.price); const stock = Number(p.stock || 0);
       if (!name || !category || !Number.isFinite(price) || price < 0 || !Number.isInteger(stock) || stock < 0) throw new Error(`Revisá la fila ${i + 2}: nombre, categoría, precio y stock son obligatorios y deben ser válidos.`);
-      return { name: name.slice(0,160), category: category.slice(0,80), price, description:String(p.description||'').slice(0,2000), sizes:String(p.sizes||'').slice(0,300), colors:String(p.colors||'').slice(0,300), stock, image:String(p.image||'').slice(0,1500), tag:String(p.tag||'').slice(0,80) };
+      return { code:String(p.code||'').trim().slice(0,64), name: name.slice(0,160), category: category.slice(0,80), price, description:String(p.description||'').slice(0,2000), sizes:String(p.sizes||'').slice(0,300), colors:String(p.colors||'').slice(0,300), stock, image:String(p.image||'').slice(0,1500), tag:String(p.tag||'').slice(0,80) };
     });
-    const statements = [sql`DELETE FROM products`, ...clean.map(p => sql`INSERT INTO products (name, category, price, description, sizes, colors, stock, image, tag) VALUES (${p.name},${p.category},${p.price},${p.description},${p.sizes},${p.colors},${p.stock},${p.image},${p.tag})`)];
+    const codes=new Set(); for(const p of clean){const key=p.code.toLocaleLowerCase();if(key&&codes.has(key))throw new Error('Hay códigos de producto repetidos en el archivo.');if(key)codes.add(key)}
+    const statements = [sql`DELETE FROM products`, ...clean.map(p => sql`INSERT INTO products (code,name, category, price, description, sizes, colors, stock, image, tag) VALUES (${p.code},${p.name},${p.category},${p.price},${p.description},${p.sizes},${p.colors},${p.stock},${p.image},${p.tag})` )];
     await sql.transaction(statements);
     const actor=identity(req)?.email||'usuario';
     await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${actor},'products.import',${`Importó ${clean.length} productos`})`;
