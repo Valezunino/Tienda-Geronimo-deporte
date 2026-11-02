@@ -1,15 +1,11 @@
 # Gerónimo Deportes
 
-Tienda web de Gerónimo Deportes desplegada en Vercel y conectada a Neon.
+Tienda web conectada a Neon y publicada en Vercel.
 
-## Catálogo y panel
+## Panel de catálogo
 
-- La tienda consulta los productos publicados en Neon mediante `/api/products`.
-- El panel privado está en `/admin.html`.
-- Para cargar productos, descargá la plantilla CSV, completá los datos, guardala como `.xlsx` o `.csv`, subila al panel y confirmá luego de revisar la vista previa.
-- Las columnas disponibles son `nombre`, `categoria`, `precio`, `descripcion`, `talles`, `colores`, `stock`, `imagen` y `etiqueta`. `nombre`, `categoria`, `precio` y `stock` son obligatorios. La imagen debe ser una URL pública.
-- La importación reemplaza el catálogo completo actual.
+Ingresá en `/admin.html`, descargá la plantilla, completá una fila por producto, subí el archivo `.xlsx` o `.csv`, revisá la vista previa y confirmá. La importación reemplaza el catálogo actual.
 
-## Variables privadas necesarias en Vercel
+Columnas: `nombre`, `categoria`, `precio`, `descripcion`, `talles`, `colores`, `stock`, `imagen`, `etiqueta`. Los campos imagen deben contener una URL pública. Nombre, categoría, precio y stock son obligatorios.
 
-`DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` y `ADMIN_SESSION_SECRET`. No guardar estos valores en GitHub.
+Las variables privadas de acceso y conexión se mantienen en Vercel, no en el repositorio.
