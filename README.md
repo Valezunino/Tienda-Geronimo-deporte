@@ -1,9 +1,15 @@
 # Gerónimo Deportes
 
-Tienda web estática de Gerónimo Deportes.
+Tienda web de Gerónimo Deportes desplegada en Vercel y conectada a Neon.
 
-## Deploy en Vercel
+## Catálogo y panel
 
-El sitio se sirve desde `index.html` en la raíz. No necesita instalación de dependencias ni comando de build.
+- La tienda consulta los productos publicados en Neon mediante `/api/products`.
+- El panel privado está en `/admin.html`.
+- Para cargar productos, descargá la plantilla CSV, completá los datos, guardala como `.xlsx` o `.csv`, subila al panel y confirmá luego de revisar la vista previa.
+- Las columnas disponibles son `nombre`, `categoria`, `precio`, `descripcion`, `talles`, `colores`, `stock`, `imagen` y `etiqueta`. `nombre`, `categoria`, `precio` y `stock` son obligatorios. La imagen debe ser una URL pública.
+- La importación reemplaza el catálogo completo actual.
 
-Cada actualización a la rama `main` puede desplegarse automáticamente desde Vercel cuando el repositorio está conectado al proyecto.
+## Variables privadas necesarias en Vercel
+
+`DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` y `ADMIN_SESSION_SECRET`. No guardar estos valores en GitHub.
