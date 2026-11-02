@@ -29,10 +29,29 @@ module.exports = async function handler(req, res) {
       const code=String(p.code||'').trim().slice(0,64), name=String(p.name||'').trim(), category=String(p.category||'').trim();
       const price=Number(p.price), stock=Number(p.stock);
       if (!code || !name || !category || !Number.isFinite(price) || price<0 || !Number.isInteger(stock) || stock<0) return res.status(400).json({error:'Completá un SKU único, nombre, categoría, precio y stock válido.'});
-      const image=String(p.image||'').trim().slice(0,1500);
-      if (image) { let url; try { url=new URL(image); } catch { return res.status(400).json({error:'La imagen debe tener una URL pública válida.'}); } if (!['http:','https:'].includes(url.protocol)) return res.status(400).json({error:'La imagen debe usar una URL HTTP o HTTPS.'}); }
+      let image=String(p.image||'').trim();
+      if (image.startsWith('data:')) {
+        if (image.length>900000) return res.status(413).json({error:'La imagen optimizada supera el límite de 640 KB.'});
+        const match=image.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);
+        if (!match) return res.status(400).json({error:'El archivo debe ser una imagen JPG, PNG o WebP válida.'});
+        const bytes=Buffer.from(match[2],'base64');
+        if (!bytes.length || bytes.length>640*1024) return res.status(413).json({error:'La imagen optimizada supera el límite de 640 KB.'});
+        image='';
+        var uploadedImage={bytes,mime:match[1]};
+      } else if (image) {
+        if (image.length>1500) return res.status(400).json({error:'La URL de imagen es demasiado larga.'});
+        let url; try { url=new URL(image); } catch { return res.status(400).json({error:'La imagen debe tener una URL pública válida.'}); }
+        if (!['http:','https:'].includes(url.protocol)) return res.status(400).json({error:'La imagen debe usar una URL HTTP o HTTPS.'});
+      }
       const duplicate=await sql`SELECT id FROM products WHERE LOWER(code)=LOWER(${code}) LIMIT 1`;
       if (duplicate.length) return res.status(409).json({error:'Ya existe un producto con ese código SKU.'});
+      if (uploadedImage) {
+        const {put}=await import('@vercel/blob');
+        const ext=uploadedImage.mime==='image/webp'?'webp':uploadedImage.mime==='image/png'?'png':'jpg';
+        const safeCode=code.replace(/[^a-zA-Z0-9_-]/g,'-').slice(0,48);
+        const blob=await put(`productos/${safeCode}-${Date.now()}.${ext}`,uploadedImage.bytes,{access:'public',addRandomSuffix:true,contentType:uploadedImage.mime});
+        image=blob.url;
+      }
       const rows=await sql`INSERT INTO products (code,name,category,price,description,sizes,colors,stock,image,tag) VALUES (${code},${name.slice(0,160)},${category.slice(0,80)},${price},${String(p.description||'').slice(0,2000)},${String(p.sizes||'').slice(0,300)},${String(p.colors||'').slice(0,300)},${stock},${image},${String(p.tag||'').slice(0,80)}) RETURNING id,code,name,category,price,description,sizes,colors,stock,image,tag`;
       await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${createActor},'products.create',${`Agregó el producto ${name} (${code})`})`;
       return res.status(201).json({ok:true,product:rows[0]});
