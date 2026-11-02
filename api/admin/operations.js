@@ -20,10 +20,22 @@ module.exports=async function handler(req,res){
     await setup(sql);
     if(req.method==='GET'){
       const section=String(req.query?.module||'');
-      const permission=section==='stock'?'stock.view':section==='sales'?'sales.view':null;
+      const permission=section==='stock'?'stock.view':section==='sales'?'sales.view':section==='reports'?'reports.view':null;
       const manage=section==='stock'?'stock.manage':section==='sales'?'sales.manage':null;
       if(!permission)return res.status(400).json({error:'Sección no válida.'});
       if(!allowed(req,permission)&&!allowed(req,manage))return res.status(403).json({error:'Tu rol no tiene permiso para ver esta sección.'});
+      if(section==='reports'){
+        const from=String(req.query?.from||''),to=String(req.query?.to||'');
+        if((from&&!/^\\d{4}-\\d{2}-\\d{2}$/.test(from))||(to&&!/^\\d{4}-\\d{2}-\\d{2}$/.test(to)))return res.status(400).json({error:'Ingresá fechas válidas.'});
+        if(from&&to&&from>to)return res.status(400).json({error:'La fecha inicial no puede ser posterior a la fecha final.'});
+        const summaryRows=await sql`SELECT COUNT(*)::int AS sales_count,COALESCE(SUM(total),0) AS revenue,COALESCE(AVG(total),0) AS average_ticket FROM admin_sales WHERE (${from||null}::date IS NULL OR created_at>=${from||null}::date) AND (${to||null}::date IS NULL OR created_at<(${to||null}::date+INTERVAL '1 day'))`;
+        const unitsRows=await sql`SELECT COALESCE(SUM(i.quantity),0)::int AS units_sold FROM admin_sale_items i JOIN admin_sales s ON s.id=i.sale_id WHERE (${from||null}::date IS NULL OR s.created_at>=${from||null}::date) AND (${to||null}::date IS NULL OR s.created_at<(${to||null}::date+INTERVAL '1 day'))`;
+        const bestProducts=await sql`SELECT i.product_id,i.product_name,SUM(i.quantity)::int AS units_sold,COALESCE(SUM(i.line_total),0) AS revenue FROM admin_sale_items i JOIN admin_sales s ON s.id=i.sale_id WHERE (${from||null}::date IS NULL OR s.created_at>=${from||null}::date) AND (${to||null}::date IS NULL OR s.created_at<(${to||null}::date+INTERVAL '1 day')) GROUP BY i.product_id,i.product_name ORDER BY units_sold DESC,revenue DESC LIMIT 20`;
+        const movements=await sql`SELECT id,product_name,actor,movement,quantity,reason,created_at FROM inventory_movements WHERE (${from||null}::date IS NULL OR created_at>=${from||null}::date) AND (${to||null}::date IS NULL OR created_at<(${to||null}::date+INTERVAL '1 day')) ORDER BY created_at DESC LIMIT 500`;
+        const movementSummary=await sql`SELECT COALESCE(SUM(quantity) FILTER(WHERE movement='entrada'),0)::int AS inbound,COALESCE(SUM(quantity) FILTER(WHERE movement='salida'),0)::int AS outbound,COUNT(*)::int AS movement_count FROM inventory_movements WHERE (${from||null}::date IS NULL OR created_at>=${from||null}::date) AND (${to||null}::date IS NULL OR created_at<(${to||null}::date+INTERVAL '1 day'))`;
+        const lowStock=await sql`SELECT id,code,name,category,stock FROM products WHERE stock<=5 ORDER BY stock ASC,name LIMIT 200`;
+        return res.status(200).json({summary:{...summaryRows[0],...unitsRows[0]},bestProducts,movements,movementSummary:movementSummary[0],lowStock,threshold:5,from:from||null,to:to||null});
+      }
       const products=await sql`SELECT id,code,name,category,price,stock FROM products ORDER BY name`;
       if(section==='stock'){
         const movements=await sql`SELECT id,product_id,product_name,actor,movement,quantity,reason,created_at FROM inventory_movements ORDER BY created_at DESC LIMIT 200`;
