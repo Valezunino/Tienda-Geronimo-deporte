@@ -1,0 +1,8 @@
+{
+  "name": "geronimo-deportes",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2"
+  }
+}
