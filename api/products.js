@@ -11,6 +11,8 @@ async function ensure(sql) {
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS code TEXT NOT NULL DEFAULT ''`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS products_code_unique ON products(code) WHERE code<>''`;
   await sql`CREATE TABLE IF NOT EXISTS admin_audit(id BIGSERIAL PRIMARY KEY,actor TEXT NOT NULL,action TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',created_at TIMESTAMPTZ DEFAULT NOW())`;
+  await sql`CREATE TABLE IF NOT EXISTS product_promotions(id BIGSERIAL PRIMARY KEY,product_name TEXT NOT NULL,category TEXT NOT NULL,offer_price NUMERIC(12,2) NOT NULL,starts_at TIMESTAMPTZ NOT NULL,ends_at TIMESTAMPTZ NOT NULL,actor TEXT NOT NULL DEFAULT '',updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS product_promotions_product_unique ON product_promotions(LOWER(product_name),LOWER(category))`;
 }
 module.exports = async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
