@@ -32,7 +32,7 @@ module.exports=async(req,res)=>{
       const isOwner=actor.role==='owner';
       const rows=isOwner
         ?await sql`SELECT o.id,o.supplier_email,o.reference,o.file_name,o.item_count,o.total,o.created_at,COALESCE(json_agg(json_build_object('product_code',i.product_code,'product_name',i.product_name,'quantity',i.quantity,'unit_cost',i.unit_cost,'line_total',i.line_total)) FILTER(WHERE i.id IS NOT NULL),'[]'::json) AS items FROM supplier_orders o LEFT JOIN supplier_order_items i ON i.order_id=o.id GROUP BY o.id ORDER BY o.created_at DESC LIMIT 500`
-        :await sql`SELECT o.id,o.supplier_email,o.reference,o.file_name,o.item_count,o.total,o.created_at,COALESCE(json_agg(json_build_object('product_code',i.product_code,'product_name',i.product_name,'quantity',i.quantity,'unit_cost',i.unit_cost,'line_total',i.line_total)) FILTER(WHERE i.id IS NOT NULL),'[]'::json) AS items FROM supplier_orders o LEFT JOIN supplier_order_items i ON i.order_id=o.id WHERE LOWER(o.supplier_email)=LOWER(\${actor.email||''}) GROUP BY o.id ORDER BY o.created_at DESC LIMIT 500`;
+        :await sql`SELECT o.id,o.supplier_email,o.reference,o.file_name,o.item_count,o.total,o.created_at,COALESCE(json_agg(json_build_object('product_code',i.product_code,'product_name',i.product_name,'quantity',i.quantity,'unit_cost',i.unit_cost,'line_total',i.line_total)) FILTER(WHERE i.id IS NOT NULL),'[]'::json) AS items FROM supplier_orders o LEFT JOIN supplier_order_items i ON i.order_id=o.id WHERE LOWER(o.supplier_email)=LOWER(${actor.email||''}) GROUP BY o.id ORDER BY o.created_at DESC LIMIT 500`;
       return res.status(200).json({orders:rows,ownerView:isOwner});
     }
     if(req.method!=='POST')return res.status(405).json({error:'Método no permitido'});
@@ -40,7 +40,7 @@ module.exports=async(req,res)=>{
     const body=req.body||{},email=String(actor.email||'').trim().toLowerCase();
     const requestedSupplier=String(body.supplierEmail||'').trim().toLowerCase();
     const supplierEmail=actor.role==='owner'&&requestedSupplier?requestedSupplier:email;
-    if(supplierEmail&&!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(supplierEmail))return res.status(400).json({error:'Ingresá un correo válido para el proveedor.'});
+    if(supplierEmail&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(supplierEmail))return res.status(400).json({error:'Ingresá un correo válido para el proveedor.'});
     const reference=String(body.reference||'').trim().slice(0,120),fileName=String(body.fileName||'').trim().slice(0,180);
     if(!email||!fileName)return res.status(400).json({error:'No se pudo identificar la cuenta o el archivo.'});
     if(!Array.isArray(body.items)||body.items.length<1||body.items.length>2000)return res.status(400).json({error:'El Excel debe contener entre 1 y 2.000 renglones.'});
@@ -53,15 +53,15 @@ module.exports=async(req,res)=>{
     const payload=JSON.stringify(items);
     const rows=await sql`WITH created AS (
       INSERT INTO supplier_orders(supplier_email,reference,file_name,item_count,total)
-      VALUES(\${email},\${reference},\${fileName},\${items.length},\${total}) RETURNING id
+      VALUES(${supplierEmail},${reference},${fileName},${items.length},${total}) RETURNING id
     ), inserted_items AS (
       INSERT INTO supplier_order_items(order_id,product_code,product_name,quantity,unit_cost,line_total)
       SELECT created.id,x.product_code,x.product_name,x.quantity,x.unit_cost,x.line_total
-      FROM created CROSS JOIN jsonb_to_recordset(\${payload}::jsonb) AS x(product_code TEXT,product_name TEXT,quantity NUMERIC,unit_cost NUMERIC,line_total NUMERIC)
+      FROM created CROSS JOIN jsonb_to_recordset(${payload}::jsonb) AS x(product_code TEXT,product_name TEXT,quantity NUMERIC,unit_cost NUMERIC,line_total NUMERIC)
       RETURNING id
     ), logged AS (
       INSERT INTO admin_audit(actor,action,detail)
-      SELECT \${email},'supplier.order.upload',\${'Cargó pedido '+reference+' con '+items.length+' renglones por $ '+total}
+      SELECT ${email},'supplier.order.upload',${'Cargó pedido '+reference+' con '+items.length+' renglones por $ '+total}
       RETURNING id
     )
     SELECT created.id FROM created CROSS JOIN (SELECT COUNT(*) FROM inserted_items) AS complete CROSS JOIN logged`;
