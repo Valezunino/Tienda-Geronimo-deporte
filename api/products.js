@@ -1,5 +1,5 @@
 const { neon } = require('@neondatabase/serverless');
-const { authorized, allowed } = require('./_auth');
+const { authorized, allowed, identity } = require('./_auth');
 function db() { if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL no está configurada'); return neon(process.env.DATABASE_URL); }
 async function ensure(sql) {
   await sql`CREATE TABLE IF NOT EXISTS products (
@@ -8,6 +8,7 @@ async function ensure(sql) {
     sizes TEXT NOT NULL DEFAULT '', colors TEXT NOT NULL DEFAULT '', stock INTEGER NOT NULL DEFAULT 0,
     image TEXT NOT NULL DEFAULT '', tag TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`;
+  await sql`CREATE TABLE IF NOT EXISTS admin_audit(id BIGSERIAL PRIMARY KEY,actor TEXT NOT NULL,action TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',created_at TIMESTAMPTZ DEFAULT NOW())`;
 }
 module.exports = async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
@@ -30,6 +31,8 @@ module.exports = async function handler(req, res) {
     });
     const statements = [sql`DELETE FROM products`, ...clean.map(p => sql`INSERT INTO products (name, category, price, description, sizes, colors, stock, image, tag) VALUES (${p.name},${p.category},${p.price},${p.description},${p.sizes},${p.colors},${p.stock},${p.image},${p.tag})`)];
     await sql.transaction(statements);
+    const actor=identity(req)?.email||'usuario';
+    await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${actor},'products.import',${`Importó ${clean.length} productos`})`;
     return res.status(200).json({ ok:true, count:clean.length });
   } catch (e) { return res.status(400).json({ error:e.message || 'No se pudo procesar el catálogo.' }); }
 };
