@@ -1,5 +1,5 @@
 const { neon } = require('@neondatabase/serverless');
-const { authorized } = require('./_auth');
+const { authorized, allowed } = require('./_auth');
 function db() { if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL no está configurada'); return neon(process.env.DATABASE_URL); }
 async function ensure(sql) {
   await sql`CREATE TABLE IF NOT EXISTS products (
@@ -19,6 +19,7 @@ module.exports = async function handler(req, res) {
     }
     if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
     if (!authorized(req)) return res.status(401).json({ error: 'Iniciá sesión para importar productos.' });
+    if (!allowed(req, 'products.import')) return res.status(403).json({ error: 'Tu rol no tiene permiso para importar productos.' });
     const products = req.body?.products;
     if (!Array.isArray(products) || products.length < 1 || products.length > 500) return res.status(400).json({ error: 'El Excel debe incluir entre 1 y 500 productos.' });
     const clean = products.map((p, i) => {
