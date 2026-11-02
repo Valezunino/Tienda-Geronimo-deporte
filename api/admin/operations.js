@@ -2,6 +2,7 @@ const {neon}=require('@neondatabase/serverless');
 const {identity,allowed}=require('../_auth');
 
 async function setup(sql){
+  await sql`CREATE TABLE IF NOT EXISTS products (id BIGSERIAL PRIMARY KEY,name TEXT NOT NULL,category TEXT NOT NULL,price NUMERIC(12,2) NOT NULL DEFAULT 0,description TEXT NOT NULL DEFAULT '',sizes TEXT NOT NULL DEFAULT '',colors TEXT NOT NULL DEFAULT '',stock INTEGER NOT NULL DEFAULT 0,image TEXT NOT NULL DEFAULT '',tag TEXT NOT NULL DEFAULT '',updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
   await sql`CREATE TABLE IF NOT EXISTS admin_audit(id BIGSERIAL PRIMARY KEY,actor TEXT NOT NULL,action TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',created_at TIMESTAMPTZ DEFAULT NOW())`;
   await sql`CREATE TABLE IF NOT EXISTS inventory_movements(id BIGSERIAL PRIMARY KEY,product_id BIGINT NOT NULL,product_name TEXT NOT NULL,actor TEXT NOT NULL,movement TEXT NOT NULL CHECK(movement IN ('entrada','salida')),quantity INTEGER NOT NULL CHECK(quantity>0),reason TEXT NOT NULL DEFAULT '',sale_id BIGINT,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
   await sql`CREATE TABLE IF NOT EXISTS admin_sales(id BIGSERIAL PRIMARY KEY,actor TEXT NOT NULL,customer_name TEXT NOT NULL DEFAULT '',payment_method TEXT NOT NULL,total NUMERIC(12,2) NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
