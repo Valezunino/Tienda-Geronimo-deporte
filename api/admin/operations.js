@@ -56,6 +56,14 @@ module.exports=async function handler(req,res){
       if(!rows.length)return res.status(409).json({error:'No se pudo actualizar. Revisá el producto y que haya stock suficiente para la salida.'});
       return res.status(200).json({ok:true,stock:Number(rows[0].stock)});
     }
+    if(body.action==='stock.set'){
+      if(!allowed(req,'stock.manage'))return res.status(403).json({error:'Tu rol no tiene permiso para gestionar el stock.'});
+      const productId=Number(body.productId),newStock=Number(body.newStock),reason=String(body.reason||'').trim();
+      if(!Number.isSafeInteger(productId)||productId<1||!Number.isSafeInteger(newStock)||newStock<0||newStock>1000000||!reason||reason.length>300)return res.status(400).json({error:'Ingresá un producto, un stock final entre 0 y 1.000.000 y el motivo del ajuste.'});
+      const rows=await sql`WITH target AS MATERIALIZED (SELECT id,stock AS old_stock FROM products WHERE id=${productId} FOR UPDATE),updated AS (UPDATE products p SET stock=${newStock},updated_at=NOW() FROM target t WHERE p.id=t.id RETURNING p.id,p.name,p.sizes,p.colors,p.stock),logged AS (INSERT INTO inventory_movements(product_id,product_name,actor,movement,quantity,reason) SELECT u.id,concat_ws(' · ',u.name,NULLIF(u.sizes,''),NULLIF(u.colors,'')),${actor.email||'usuario'},CASE WHEN u.stock>t.old_stock THEN 'entrada' ELSE 'salida' END,ABS(u.stock-t.old_stock),${reason} FROM updated u JOIN target t ON t.id=u.id WHERE u.stock<>t.old_stock RETURNING id),audit AS (INSERT INTO admin_audit(actor,action,detail) SELECT ${actor.email||'usuario'},'stock.set','Stock ajustado de '||t.old_stock||' a '||u.stock||' unidades · '||${reason} FROM updated u JOIN target t ON t.id=u.id RETURNING id) SELECT updated.stock FROM updated CROSS JOIN (SELECT COUNT(*) FROM logged) AS movement_log CROSS JOIN audit`;
+      if(!rows.length)return res.status(404).json({error:'No encontramos esa variante del producto.'});
+      return res.status(200).json({ok:true,stock:Number(rows[0].stock)});
+    }
     if(body.action==='sales.create'){
       if(!allowed(req,'sales.manage'))return res.status(403).json({error:'Tu rol no puede registrar ventas.'});
       const customer=String(body.customer||'').trim().slice(0,160),payment=String(body.payment||'');
