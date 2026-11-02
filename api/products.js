@@ -21,7 +21,22 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ products: rows });
     }
     if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
-    if (!authorized(req)) return res.status(401).json({ error: 'Iniciá sesión para importar productos.' });
+    if (!authorized(req)) return res.status(401).json({ error: 'Iniciá sesión para gestionar productos.' });
+    const createActor=identity(req)?.email||'usuario';
+    if (req.body?.mode === 'create' && req.body?.product) {
+      if (!allowed(req, 'products.create')) return res.status(403).json({ error: 'Tu rol no tiene permiso para crear productos.' });
+      const p=req.body.product;
+      const code=String(p.code||'').trim().slice(0,64), name=String(p.name||'').trim(), category=String(p.category||'').trim();
+      const price=Number(p.price), stock=Number(p.stock);
+      if (!code || !name || !category || !Number.isFinite(price) || price<0 || !Number.isInteger(stock) || stock<0) return res.status(400).json({error:'Completá un SKU único, nombre, categoría, precio y stock válido.'});
+      const image=String(p.image||'').trim().slice(0,1500);
+      if (image) { let url; try { url=new URL(image); } catch { return res.status(400).json({error:'La imagen debe tener una URL pública válida.'}); } if (!['http:','https:'].includes(url.protocol)) return res.status(400).json({error:'La imagen debe usar una URL HTTP o HTTPS.'}); }
+      const duplicate=await sql`SELECT id FROM products WHERE LOWER(code)=LOWER(${code}) LIMIT 1`;
+      if (duplicate.length) return res.status(409).json({error:'Ya existe un producto con ese código SKU.'});
+      const rows=await sql`INSERT INTO products (code,name,category,price,description,sizes,colors,stock,image,tag) VALUES (${code},${name.slice(0,160)},${category.slice(0,80)},${price},${String(p.description||'').slice(0,2000)},${String(p.sizes||'').slice(0,300)},${String(p.colors||'').slice(0,300)},${stock},${image},${String(p.tag||'').slice(0,80)}) RETURNING id,code,name,category,price,description,sizes,colors,stock,image,tag`;
+      await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${createActor},'products.create',${`Agregó el producto ${name} (${code})`})`;
+      return res.status(201).json({ok:true,product:rows[0]});
+    }
     if (!allowed(req, 'products.import')) return res.status(403).json({ error: 'Tu rol no tiene permiso para importar productos.' });
     const products = req.body?.products;
     if (!Array.isArray(products) || products.length < 1 || products.length > 500) return res.status(400).json({ error: 'El Excel debe incluir entre 1 y 500 productos.' });
