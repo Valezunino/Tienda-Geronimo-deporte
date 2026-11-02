@@ -26,9 +26,20 @@ module.exports = async function handler(req, res) {
     if (req.body?.mode === 'create' && req.body?.product) {
       if (!allowed(req, 'products.create')) return res.status(403).json({ error: 'Tu rol no tiene permiso para crear productos.' });
       const p=req.body.product;
-      const code=String(p.code||'').trim().slice(0,64), name=String(p.name||'').trim(), category=String(p.category||'').trim();
-      const price=Number(p.price), stock=Number(p.stock);
-      if (!code || !name || !category || !Number.isFinite(price) || price<0 || !Number.isInteger(stock) || stock<0) return res.status(400).json({error:'Completá un SKU único, nombre, categoría, precio y stock válido.'});
+      const baseCode=String(p.code||'').trim().slice(0,50), name=String(p.name||'').trim(), category=String(p.category||'').trim();
+      const price=Number(p.price);
+      const rawVariants=Array.isArray(p.variants)&&p.variants.length?p.variants:[{size:p.sizes,stock:p.stock}];
+      if (!baseCode || !name || !category || !Number.isFinite(price) || price<0) return res.status(400).json({error:'Completá un código base, nombre, categoría y precio válido.'});
+      if (rawVariants.length<1 || rawVariants.length>30) return res.status(400).json({error:'Agregá entre 1 y 30 talles por producto.'});
+      const skuPart=value=>String(value||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,20);
+      const variants=rawVariants.map((variant,index)=>{
+        const size=String(variant.size||variant.sizes||'').trim().slice(0,30),stock=Number(variant.stock);
+        const part=skuPart(size);
+        if(!size||!part||!Number.isInteger(stock)||stock<0) throw new Error(`Revisá el talle ${index+1}: ingresá un talle y un stock entero mayor o igual a cero.`);
+        return {size,stock,code:`${baseCode}-${part}`.slice(0,64)};
+      });
+      const variantKeys=new Set();
+      for(const variant of variants){const key=variant.code.toLocaleLowerCase();if(variantKeys.has(key))return res.status(400).json({error:'No podés cargar el mismo talle dos veces.'});variantKeys.add(key)}
       let image=String(p.image||'').trim();
       if (image.startsWith('data:')) {
         if (image.length>440000) return res.status(413).json({error:'La imagen optimizada supera el límite de 320 KB.'});
@@ -41,12 +52,15 @@ module.exports = async function handler(req, res) {
         let url; try { url=new URL(image); } catch { return res.status(400).json({error:'La imagen debe tener una URL pública válida.'}); }
         if (!['http:','https:'].includes(url.protocol)) return res.status(400).json({error:'La imagen debe usar una URL HTTP o HTTPS.'});
       }
-      const duplicate=await sql`SELECT id FROM products WHERE LOWER(code)=LOWER(${code}) LIMIT 1`;
-      if (duplicate.length) return res.status(409).json({error:'Ya existe un producto con ese código SKU.'});
-      const rows=await sql`INSERT INTO products (code,name,category,price,description,sizes,colors,stock,image,tag) VALUES (${code},${name.slice(0,160)},${category.slice(0,80)},${price},${String(p.description||'').slice(0,2000)},${String(p.sizes||'').slice(0,300)},${String(p.colors||'').slice(0,300)},${stock},${image},${String(p.tag||'').slice(0,80)}) RETURNING id,code,name,category,price,description,sizes,colors,stock,image,tag`;
-      await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${createActor},'products.create',${`Agregó el producto ${name} (${code})`})`;
-      const created=rows[0];if(String(created.image||'').startsWith('data:image/'))created.image=`/api/product-image?id=${created.id}`;
-      return res.status(201).json({ok:true,product:created});
+      const duplicates=[];
+      for(const variant of variants){const found=await sql`SELECT id FROM products WHERE LOWER(code)=LOWER(${variant.code}) LIMIT 1`;if(found.length)duplicates.push(variant.code)}
+      if(duplicates.length) return res.status(409).json({error:`Ya existen estos códigos SKU: ${duplicates.slice(0,5).join(', ')}.`});
+      const common={name:name.slice(0,160),category:category.slice(0,80),description:String(p.description||'').slice(0,2000),colors:String(p.colors||'').slice(0,300)};
+      const statements=variants.map(variant=>sql`INSERT INTO products (code,name,category,price,description,sizes,colors,stock,image,tag) VALUES (${variant.code},${common.name},${common.category},${price},${common.description},${variant.size},${common.colors},${variant.stock},${image},${''}) RETURNING id,code,name,category,price,description,sizes,colors,stock,image,tag`);
+      const inserted=await sql.transaction(statements);
+      await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${createActor},'products.create',${`Agregó el producto ${name} con ${variants.length} talle${variants.length===1?'':'s'} (${baseCode})`})`;
+      const products=inserted.flat().map(created=>({...created,image:String(created.image||'').startsWith('data:image/')?`/api/product-image?id=${created.id}`:created.image}));
+      return res.status(201).json({ok:true,count:products.length,products,product:products[0]});
     }
     if (!allowed(req, 'products.import')) return res.status(403).json({ error: 'Tu rol no tiene permiso para importar productos.' });
     const products = req.body?.products;
