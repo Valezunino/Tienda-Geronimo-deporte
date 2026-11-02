@@ -50,7 +50,7 @@ module.exports=async(req,res)=>{
       return {productCode:code,productName:name,quantity,unitCost,lineTotal:Math.round(quantity*unitCost*100)/100};
     });
     const total=Math.round(items.reduce((sum,x)=>sum+x.lineTotal,0)*100)/100;
-    const payload=JSON.stringify(items);
+    const payload=JSON.stringify(items.map(x=>({product_code:x.productCode,product_name:x.productName,quantity:x.quantity,unit_cost:x.unitCost,line_total:x.lineTotal})));
     const rows=await sql`WITH created AS (
       INSERT INTO supplier_orders(supplier_email,reference,file_name,item_count,total)
       VALUES(${supplierEmail},${reference},${fileName},${items.length},${total}) RETURNING id
