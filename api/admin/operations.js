@@ -26,7 +26,7 @@ module.exports=async function handler(req,res){
       if(!allowed(req,permission)&&!allowed(req,manage))return res.status(403).json({error:'Tu rol no tiene permiso para ver esta sección.'});
       if(section==='reports'){
         const from=String(req.query?.from||''),to=String(req.query?.to||'');
-        if((from&&!/^\\d{4}-\\d{2}-\\d{2}$/.test(from))||(to&&!/^\\d{4}-\\d{2}-\\d{2}$/.test(to)))return res.status(400).json({error:'Ingresá fechas válidas.'});
+        if((from&&!/^\d{4}-\d{2}-\d{2}$/.test(from))||(to&&!/^\d{4}-\d{2}-\d{2}$/.test(to)))return res.status(400).json({error:'Ingresá fechas válidas.'});
         if(from&&to&&from>to)return res.status(400).json({error:'La fecha inicial no puede ser posterior a la fecha final.'});
         const summaryRows=await sql`SELECT COUNT(*)::int AS sales_count,COALESCE(SUM(total),0) AS revenue,COALESCE(AVG(total),0) AS average_ticket FROM admin_sales WHERE (${from||null}::date IS NULL OR created_at>=${from||null}::date) AND (${to||null}::date IS NULL OR created_at<(${to||null}::date+INTERVAL '1 day'))`;
         const unitsRows=await sql`SELECT COALESCE(SUM(i.quantity),0)::int AS units_sold FROM admin_sale_items i JOIN admin_sales s ON s.id=i.sale_id WHERE (${from||null}::date IS NULL OR s.created_at>=${from||null}::date) AND (${to||null}::date IS NULL OR s.created_at<(${to||null}::date+INTERVAL '1 day'))`;
