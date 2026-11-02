@@ -18,7 +18,9 @@ module.exports = async function handler(req, res) {
     const sql = db(); await ensure(sql);
     if (req.method === 'GET') {
       const rows = await sql`SELECT id, code, name, category, price, description, sizes, colors, stock, image, tag FROM products ORDER BY updated_at DESC, id DESC`;
-      return res.status(200).json({ products: rows.map(p=>({...p,image:String(p.image||'').startsWith('data:image/')?`/api/product-image?id=${p.id}`:p.image})) });
+      const offers = await sql`SELECT product_name, category, offer_price FROM product_promotions WHERE starts_at <= NOW() AND ends_at >= NOW()`;
+      const offerMap = new Map(offers.map(o=>[`${String(o.product_name).toLocaleLowerCase()}|${String(o.category).toLocaleLowerCase()}`,Number(o.offer_price)]));
+      return res.status(200).json({ products: rows.map(p=>({...p,offer_price:offerMap.get(`${String(p.name).toLocaleLowerCase()}|${String(p.category).toLocaleLowerCase()}`)||null,image:String(p.image||'').startsWith('data:image/')?`/api/product-image?id=${p.id}`:p.image})) });
     }
     if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
     if (!authorized(req)) return res.status(401).json({ error: 'Iniciá sesión para gestionar productos.' });
