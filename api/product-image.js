@@ -17,7 +17,7 @@ module.exports = async function handler(req, res) {
     if (!bytes.length || bytes.length>320*1024) return res.status(404).json({ error: 'No se encontró la imagen.' });
     res.setHeader('Content-Type',match[1]);
     res.setHeader('Content-Length',String(bytes.length));
-    res.setHeader('Cache-Control','public, max-age=31536000, immutable');
+    res.setHeader('Cache-Control','public, max-age=60, s-maxage=300, stale-while-revalidate=3600');
     res.setHeader('X-Content-Type-Options','nosniff');
     return res.status(200).send(bytes);
   } catch (error) {
