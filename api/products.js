@@ -53,7 +53,7 @@ module.exports = async function handler(req, res) {
       if(!image)return res.status(400).json({error:'Seleccioná una imagen antes de guardar.'});
       if(image.startsWith('data:')){
         if(image.length>440000)return res.status(413).json({error:'La imagen optimizada supera el límite de 320 KB.'});
-        const match=image.match(/^data:(image\\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);
+        const match=image.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);
         if(!match)return res.status(400).json({error:'El archivo debe ser una imagen JPG, PNG o WebP válida.'});
         const bytes=Buffer.from(match[2],'base64');
         if(!bytes.length||bytes.length>320*1024)return res.status(413).json({error:'La imagen optimizada supera el límite de 320 KB.'});
