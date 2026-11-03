@@ -51,11 +51,13 @@ module.exports = async function handler(req, res) {
       if (!baseCode || !name || !category || !Number.isFinite(price) || price<0) return res.status(400).json({error:'Completá un código base, nombre, categoría y precio válido.'});
       if (rawVariants.length<1 || rawVariants.length>30) return res.status(400).json({error:'Agregá entre 1 y 30 talles por producto.'});
       const skuPart=value=>String(value||'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,20);
+      const colorPart=skuPart(p.colors).slice(0,15),codePrefix=baseCode.slice(0,colorPart?31:48);
       const variants=rawVariants.map((variant,index)=>{
         const size=String(variant.size||variant.sizes||'').trim().slice(0,30),stock=Number(variant.stock);
-        const part=skuPart(size);
+        const part=skuPart(size).slice(0,15);
         if(!size||!part||!Number.isInteger(stock)||stock<0) throw new Error(`Revisá el talle ${index+1}: ingresá un talle y un stock entero mayor o igual a cero.`);
-        return {size,stock,code:`${baseCode}-${part}`.slice(0,64)};
+        const code=colorPart?`${codePrefix}-${colorPart}-${part}`:`${codePrefix}-${part}`;
+        return {size,stock,code};
       });
       const variantKeys=new Set();
       for(const variant of variants){const key=variant.code.toLocaleLowerCase();if(variantKeys.has(key))return res.status(400).json({error:'No podés cargar el mismo talle dos veces.'});variantKeys.add(key)}
