@@ -35,6 +35,24 @@ module.exports=async(req,res)=>{
         :await sql`SELECT o.id,o.supplier_email,o.reference,o.file_name,o.item_count,o.total,o.created_at,COALESCE(json_agg(json_build_object('product_code',i.product_code,'product_name',i.product_name,'quantity',i.quantity,'unit_cost',i.unit_cost,'line_total',i.line_total)) FILTER(WHERE i.id IS NOT NULL),'[]'::json) AS items FROM supplier_orders o LEFT JOIN supplier_order_items i ON i.order_id=o.id WHERE LOWER(o.supplier_email)=LOWER(${actor.email||''}) GROUP BY o.id ORDER BY o.created_at DESC LIMIT 500`;
       return res.status(200).json({orders:rows,ownerView:isOwner});
     }
+    if(req.method==='DELETE'){
+      if(!allowed(req,'purchases.manage'))return res.status(403).json({error:'Tu rol no tiene permiso para eliminar planillas.'});
+      const id=Number(req.query?.id||req.body?.id);
+      if(!Number.isSafeInteger(id)||id<1)return res.status(400).json({error:'Elegí una planilla válida.'});
+      const isOwner=actor.role==='owner',email=String(actor.email||'').trim().toLowerCase();
+      const removed=await sql`WITH deleted AS (
+        DELETE FROM supplier_orders
+        WHERE id=${id} AND (${isOwner} OR LOWER(supplier_email)=LOWER(${email}))
+        RETURNING id,supplier_email,reference,file_name
+      ), logged AS (
+        INSERT INTO admin_audit(actor,action,detail)
+        SELECT ${email},'supplier.order.delete','Eliminó planilla '||file_name||' · Pedido #'||id||' · proveedor '||supplier_email
+        FROM deleted RETURNING id
+      )
+      SELECT deleted.id FROM deleted LEFT JOIN logged ON TRUE`;
+      if(!removed.length)return res.status(404).json({error:'No encontramos esa planilla o no tenés permiso para eliminarla.'});
+      return res.status(200).json({ok:true,orderId:id});
+    }
     if(req.method!=='POST')return res.status(405).json({error:'Método no permitido'});
     if(!allowed(req,'purchases.manage'))return res.status(403).json({error:'Tu rol no tiene permiso para cargar pedidos.'});
     const body=req.body||{},email=String(actor.email||'').trim().toLowerCase();
