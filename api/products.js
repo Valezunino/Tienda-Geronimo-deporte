@@ -20,7 +20,10 @@ module.exports = async function handler(req, res) {
   try {
     const sql = db(); await ensure(sql);
     if (req.method === 'GET') {
-      const rows = await sql`SELECT id, code, name, category, price, description, sizes, colors, stock, image, tag FROM products WHERE active=TRUE ORDER BY updated_at DESC, id DESC`;
+      const includeDrafts=req.query?.includeDrafts==='1' && authorized(req) && allowed(req,'products.view');
+      const rows = includeDrafts
+        ? await sql`SELECT id, code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products ORDER BY updated_at DESC, id DESC`
+        : await sql`SELECT id, code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products WHERE active=TRUE ORDER BY updated_at DESC, id DESC`;
       const offers = await sql`SELECT product_name, category, offer_price FROM product_promotions WHERE starts_at <= NOW() AND ends_at >= NOW()`;
       const offerMap = new Map(offers.map(o=>[`${String(o.product_name).toLocaleLowerCase()}|${String(o.category).toLocaleLowerCase()}`,Number(o.offer_price)]));
       return res.status(200).json({ products: rows.map(p=>({...p,offer_price:offerMap.get(`${String(p.name).toLocaleLowerCase()}|${String(p.category).toLocaleLowerCase()}`)||null,image:String(p.image||'').startsWith('data:image/')?`/api/product-image?id=${p.id}`:p.image})) });
@@ -42,6 +45,28 @@ module.exports = async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
     if (!authorized(req)) return res.status(401).json({ error: 'Iniciá sesión para gestionar productos.' });
     const createActor=identity(req)?.email||'usuario';
+    if (req.body?.mode === 'update') {
+      if (!allowed(req, 'products.edit')) return res.status(403).json({ error: 'Tu rol no tiene permiso para editar productos.' });
+      const id=Number(req.body?.id), image=String(req.body?.image||'').trim();
+      if(!Number.isSafeInteger(id)||id<1)return res.status(400).json({error:'Elegí un producto válido.'});
+      if(!image)return res.status(400).json({error:'Seleccioná una imagen antes de guardar.'});
+      if(image.startsWith('data:')){
+        if(image.length>440000)return res.status(413).json({error:'La imagen optimizada supera el límite de 320 KB.'});
+        const match=image.match(/^data:(image\\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);
+        if(!match)return res.status(400).json({error:'El archivo debe ser una imagen JPG, PNG o WebP válida.'});
+        const bytes=Buffer.from(match[2],'base64');
+        if(!bytes.length||bytes.length>320*1024)return res.status(413).json({error:'La imagen optimizada supera el límite de 320 KB.'});
+      } else {
+        let url;try{url=new URL(image)}catch{return res.status(400).json({error:'La imagen debe tener una URL pública válida.'})}
+        if(!['http:','https:'].includes(url.protocol))return res.status(400).json({error:'La imagen debe usar una URL HTTP o HTTPS.'});
+      }
+      const target=await sql`SELECT name,category,price,description,colors,tag FROM products WHERE id=${id} LIMIT 1`;
+      if(!target.length)return res.status(404).json({error:'No encontramos ese producto.'});
+      const p=target[0];
+      const changed=await sql`UPDATE products SET image=${image},active=TRUE,updated_at=NOW() WHERE LOWER(name)=LOWER(${p.name}) AND LOWER(category)=LOWER(${p.category}) AND price=${p.price} AND description=${p.description} AND colors=${p.colors} AND tag=${p.tag} RETURNING id`;
+      await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${createActor},'products.update',${'Agregó o actualizó la imagen de '+p.name+' y publicó '+changed.length+' variante(s)'})`;
+      return res.status(200).json({ok:true,count:changed.length});
+    }
     if (req.body?.mode === 'create' && req.body?.product) {
       if (!allowed(req, 'products.create')) return res.status(403).json({ error: 'Tu rol no tiene permiso para crear productos.' });
       const p=req.body.product;
@@ -77,7 +102,7 @@ module.exports = async function handler(req, res) {
       for(const variant of variants){const found=await sql`SELECT id FROM products WHERE LOWER(code)=LOWER(${variant.code}) LIMIT 1`;if(found.length)duplicates.push(variant.code)}
       if(duplicates.length) return res.status(409).json({error:`Ya existen estos códigos SKU: ${duplicates.slice(0,5).join(', ')}.`});
       const common={name:name.slice(0,160),category:category.slice(0,80),description:String(p.description||'').slice(0,2000),colors:String(p.colors||'').slice(0,300)};
-      const statements=variants.map(variant=>sql`INSERT INTO products (code,name,category,price,description,sizes,colors,stock,image,tag) VALUES (${variant.code},${common.name},${common.category},${price},${common.description},${variant.size},${common.colors},${variant.stock},${image},${''}) RETURNING id,code,name,category,price,description,sizes,colors,stock,image,tag`);
+      const statements=variants.map(variant=>sql`INSERT INTO products (code,name,category,price,description,sizes,colors,stock,image,tag,active) VALUES (${variant.code},${common.name},${common.category},${price},${common.description},${variant.size},${common.colors},${variant.stock},${image},${''},${Boolean(image)}) RETURNING id,code,name,category,price,description,sizes,colors,stock,image,tag`);
       const inserted=await sql.transaction(statements);
       await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${createActor},'products.create',${`Agregó el producto ${name} con ${variants.length} talle${variants.length===1?'':'s'} (${baseCode})`})`;
       const products=inserted.flat().map(created=>({...created,image:String(created.image||'').startsWith('data:image/')?`/api/product-image?id=${created.id}`:created.image}));
@@ -93,7 +118,7 @@ module.exports = async function handler(req, res) {
       return { code:String(p.code||'').trim().slice(0,64), name: name.slice(0,160), category: category.slice(0,80), price, description:String(p.description||'').slice(0,2000), sizes:String(p.sizes||'').slice(0,300), colors:String(p.colors||'').slice(0,300), stock, image:String(p.image||'').slice(0,1500), tag:String(p.tag||'').slice(0,80) };
     });
     const codes=new Set(); for(const p of clean){const key=p.code.toLocaleLowerCase();if(key&&codes.has(key))throw new Error('Hay códigos de producto repetidos en el archivo.');if(key)codes.add(key)}
-    const statements = [sql`DELETE FROM products`, ...clean.map(p => sql`INSERT INTO products (code,name, category, price, description, sizes, colors, stock, image, tag) VALUES (${p.code},${p.name},${p.category},${p.price},${p.description},${p.sizes},${p.colors},${p.stock},${p.image},${p.tag})` )];
+    const statements = [sql`DELETE FROM products`, ...clean.map(p => sql`INSERT INTO products (code,name, category, price, description, sizes, colors, stock, image, tag, active) VALUES (${p.code},${p.name},${p.category},${p.price},${p.description},${p.sizes},${p.colors},${p.stock},${p.image},${p.tag},${Boolean(p.image)})` )];
     await sql.transaction(statements);
     const actor=identity(req)?.email||'usuario';
     await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${actor},'products.import',${`Importó ${clean.length} productos`})`;
