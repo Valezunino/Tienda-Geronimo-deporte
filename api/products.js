@@ -10,6 +10,7 @@ async function ensure(sql) {
   )`;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS code TEXT NOT NULL DEFAULT ''`;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE`;
+  await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`;
   await sql`UPDATE products SET active=FALSE,updated_at=NOW() WHERE active=TRUE AND BTRIM(image)=''`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS products_code_unique ON products(code) WHERE code<>''`;
   await sql`CREATE TABLE IF NOT EXISTS admin_audit(id BIGSERIAL PRIMARY KEY,actor TEXT NOT NULL,action TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',created_at TIMESTAMPTZ DEFAULT NOW())`;
@@ -23,8 +24,8 @@ module.exports = async function handler(req, res) {
     if (req.method === 'GET') {
       const includeDrafts=req.query?.includeDrafts==='1' && authorized(req) && allowed(req,'products.view');
       const rows = includeDrafts
-        ? await sql`SELECT id, code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products ORDER BY updated_at DESC, id DESC`
-        : await sql`SELECT id, code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products WHERE active=TRUE ORDER BY updated_at DESC, id DESC`;
+        ? await sql`SELECT id, code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products WHERE deleted_at IS NULL ORDER BY updated_at DESC, id DESC`
+        : await sql`SELECT id, code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products WHERE active=TRUE AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC`;
       const offers = await sql`SELECT product_name, category, offer_price FROM product_promotions WHERE starts_at <= NOW() AND ends_at >= NOW()`;
       const offerMap = new Map(offers.map(o=>[`${String(o.product_name).toLocaleLowerCase()}|${String(o.category).toLocaleLowerCase()}`,Number(o.offer_price)]));
       return res.status(200).json({ products: rows.map(p=>({...p,offer_price:offerMap.get(`${String(p.name).toLocaleLowerCase()}|${String(p.category).toLocaleLowerCase()}`)||null,image:String(p.image||'').startsWith('data:image/')?`/api/product-image?id=${p.id}`:p.image})) });
@@ -34,10 +35,10 @@ module.exports = async function handler(req, res) {
       if (!allowed(req, 'products.delete')) return res.status(403).json({ error: 'Tu rol no tiene permiso para eliminar productos.' });
       const id=Number(req.query?.id||req.body?.id);
       if(!Number.isSafeInteger(id)||id<1)return res.status(400).json({error:'Elegí un producto válido.'});
-      const target=await sql`SELECT name,category,price,description,colors,tag FROM products WHERE id=${id} AND active=TRUE LIMIT 1`;
+      const target=await sql`SELECT name,category,price,description,colors,tag FROM products WHERE id=${id} AND deleted_at IS NULL LIMIT 1`;
       if(!target.length)return res.status(404).json({error:'No encontramos ese producto en el catálogo.'});
       const p=target[0];
-      const removed=await sql`UPDATE products SET active=FALSE,updated_at=NOW() WHERE LOWER(name)=LOWER(${p.name}) AND LOWER(category)=LOWER(${p.category}) AND price=${p.price} AND description=${p.description} AND colors=${p.colors} AND tag=${p.tag} AND active=TRUE RETURNING id`;
+      const removed=await sql`UPDATE products SET active=FALSE,deleted_at=NOW(),updated_at=NOW() WHERE LOWER(name)=LOWER(${p.name}) AND LOWER(category)=LOWER(${p.category}) AND price=${p.price} AND description=${p.description} AND colors=${p.colors} AND tag=${p.tag} AND deleted_at IS NULL RETURNING id`;
       await sql`DELETE FROM product_promotions WHERE LOWER(product_name)=LOWER(${p.name}) AND LOWER(category)=LOWER(${p.category})`;
       const actor=identity(req)?.email||'usuario';
       await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${actor},'products.delete',${p.name+' · '+p.category+' · '+removed.length+' variante(s)'})`;
@@ -64,7 +65,7 @@ module.exports = async function handler(req, res) {
       const target=await sql`SELECT name,category,price,description,colors,tag FROM products WHERE id=${id} LIMIT 1`;
       if(!target.length)return res.status(404).json({error:'No encontramos ese producto.'});
       const p=target[0];
-      const changed=await sql`UPDATE products SET image=${image},active=TRUE,updated_at=NOW() WHERE LOWER(name)=LOWER(${p.name}) AND LOWER(category)=LOWER(${p.category}) AND price=${p.price} AND description=${p.description} AND colors=${p.colors} AND tag=${p.tag} RETURNING id`;
+      const changed=await sql`UPDATE products SET image=${image},active=TRUE,updated_at=NOW() WHERE LOWER(name)=LOWER(${p.name}) AND LOWER(category)=LOWER(${p.category}) AND price=${p.price} AND description=${p.description} AND colors=${p.colors} AND tag=${p.tag} AND deleted_at IS NULL RETURNING id`;
       await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${createActor},'products.update',${'Agregó o actualizó la imagen de '+p.name+' y publicó '+changed.length+' variante(s)'})`;
       return res.status(200).json({ok:true,count:changed.length});
     }
