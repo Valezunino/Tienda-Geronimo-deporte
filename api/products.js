@@ -9,6 +9,9 @@ async function ensure(sql) {
     image TEXT NOT NULL DEFAULT '', tag TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS code TEXT NOT NULL DEFAULT ''`;
+  await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS model_code TEXT NOT NULL DEFAULT ''`;
+  await sql`CREATE TABLE IF NOT EXISTS product_gallery (id BIGSERIAL PRIMARY KEY, model_code TEXT NOT NULL, color TEXT NOT NULL DEFAULT '', image TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
+  await sql`CREATE INDEX IF NOT EXISTS product_gallery_model_color_idx ON product_gallery(LOWER(model_code),LOWER(color),sort_order)`;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE`;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`;
   await sql`UPDATE products SET active=FALSE,updated_at=NOW() WHERE active=TRUE AND BTRIM(image)=''`;
@@ -24,11 +27,13 @@ module.exports = async function handler(req, res) {
     if (req.method === 'GET') {
       const includeDrafts=req.query?.includeDrafts==='1' && authorized(req) && allowed(req,'products.view');
       const rows = includeDrafts
-        ? await sql`SELECT id, code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products WHERE deleted_at IS NULL ORDER BY updated_at DESC, id DESC`
-        : await sql`SELECT id, code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products WHERE active=TRUE AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC`;
+        ? await sql`SELECT id, code, model_code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products WHERE deleted_at IS NULL ORDER BY updated_at DESC, id DESC`
+        : await sql`SELECT id, code, model_code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products WHERE active=TRUE AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC`;
+      const galleries=await sql`SELECT model_code,color,sort_order FROM product_gallery ORDER BY sort_order,id`;
+      const galleryMap=new Map();for(const g of galleries){const key=`${String(g.model_code).toLocaleLowerCase()}|${String(g.color).toLocaleLowerCase()}`;if(!galleryMap.has(key))galleryMap.set(key,[]);galleryMap.get(key).push(`/api/product-image?model=${encodeURIComponent(g.model_code)}&color=${encodeURIComponent(g.color)}&index=${galleryMap.get(key).length}`)}
       const offers = await sql`SELECT product_name, category, offer_price FROM product_promotions WHERE starts_at <= NOW() AND ends_at >= NOW()`;
       const offerMap = new Map(offers.map(o=>[`${String(o.product_name).toLocaleLowerCase()}|${String(o.category).toLocaleLowerCase()}`,Number(o.offer_price)]));
-      return res.status(200).json({ products: rows.map(p=>({...p,offer_price:offerMap.get(`${String(p.name).toLocaleLowerCase()}|${String(p.category).toLocaleLowerCase()}`)||null,image:String(p.image||'').startsWith('data:image/')?`/api/product-image?id=${p.id}`:p.image})) });
+      return res.status(200).json({ products: rows.map(p=>{const key=`${String(p.model_code||'').toLocaleLowerCase()}|${String(p.colors||'').toLocaleLowerCase()}`,images=galleryMap.get(key)||[];const fallback=String(p.image||'').startsWith('data:image/')?`/api/product-image?id=${p.id}`:p.image;return {...p,images:images.length?images:(fallback?[fallback]:[]),offer_price:offerMap.get(`${String(p.name).toLocaleLowerCase()}|${String(p.category).toLocaleLowerCase()}`)||null,image:fallback}}) });
     }
     if (req.method === 'DELETE') {
       if (!authorized(req)) return res.status(401).json({ error: 'Iniciá sesión para gestionar productos.' });
@@ -91,7 +96,8 @@ module.exports = async function handler(req, res) {
       });
       const variantKeys=new Set();
       for(const variant of variants){const key=variant.code.toLocaleLowerCase();if(variantKeys.has(key))return res.status(400).json({error:'No podés cargar el mismo talle dos veces.'});variantKeys.add(key)}
-      let image=String(p.image||'').trim();
+      const rawImages=Array.isArray(p.images)?p.images:[];if(rawImages.length>6)return res.status(400).json({error:'Podés cargar hasta 6 fotos por color.'});
+      let image=String(p.image||rawImages[0]||'').trim();
       if (image.startsWith('data:')) {
         if (image.length>440000) return res.status(413).json({error:'La imagen optimizada supera el límite de 320 KB.'});
         const match=image.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);
@@ -103,14 +109,16 @@ module.exports = async function handler(req, res) {
         let url; try { url=new URL(image); } catch { return res.status(400).json({error:'La imagen debe tener una URL pública válida.'}); }
         if (!['http:','https:'].includes(url.protocol)) return res.status(400).json({error:'La imagen debe usar una URL HTTP o HTTPS.'});
       }
+      for(const candidate of rawImages){if(typeof candidate!=='string'||!candidate.startsWith('data:'))return res.status(400).json({error:'Las fotos deben ser archivos JPG, PNG o WebP.'});const match=candidate.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);if(!match)return res.status(400).json({error:'Una de las fotos no es válida.'});const bytes=Buffer.from(match[2],'base64');if(!bytes.length||bytes.length>320*1024)return res.status(413).json({error:'Cada foto optimizada debe pesar hasta 320 KB.'})}
       const duplicates=[];
       for(const variant of variants){const found=await sql`SELECT id FROM products WHERE LOWER(code)=LOWER(${variant.code}) LIMIT 1`;if(found.length)duplicates.push(variant.code)}
       if(duplicates.length) return res.status(409).json({error:`Ya existen estos códigos SKU: ${duplicates.slice(0,5).join(', ')}.`});
       const common={name:name.slice(0,160),category:category.slice(0,80),description:String(p.description||'').slice(0,2000),colors:String(p.colors||'').slice(0,300)};
-      const statements=variants.map(variant=>sql`INSERT INTO products (code,name,category,price,description,sizes,colors,stock,image,tag,active) VALUES (${variant.code},${common.name},${common.category},${price},${common.description},${variant.size},${common.colors},${variant.stock},${image},${''},${Boolean(image)}) RETURNING id,code,name,category,price,description,sizes,colors,stock,image,tag`);
+      const statements=variants.map(variant=>sql`INSERT INTO products (code,model_code,name,category,price,description,sizes,colors,stock,image,tag,active) VALUES (${variant.code},${baseCode},${common.name},${common.category},${price},${common.description},${variant.size},${common.colors},${variant.stock},${image},${''},${Boolean(image)}) RETURNING id,code,model_code,name,category,price,description,sizes,colors,stock,image,tag`);
       const inserted=await sql.transaction(statements);
+      if(rawImages.length){await sql`DELETE FROM product_gallery WHERE LOWER(model_code)=LOWER(${baseCode}) AND LOWER(color)=LOWER(${common.colors})`;await sql.transaction(rawImages.map((photo,index)=>sql`INSERT INTO product_gallery(model_code,color,image,sort_order) VALUES(${baseCode},${common.colors},${photo},${index})`))}
       await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${createActor},'products.create',${`Agregó el producto ${name} con ${variants.length} talle${variants.length===1?'':'s'} (${baseCode})`})`;
-      const products=inserted.flat().map(created=>({...created,image:String(created.image||'').startsWith('data:image/')?`/api/product-image?id=${created.id}`:created.image}));
+      const galleryUrls=rawImages.map((_,index)=>`/api/product-image?model=${encodeURIComponent(baseCode)}&color=${encodeURIComponent(common.colors)}&index=${index}`);const products=inserted.flat().map(created=>({...created,images:galleryUrls.length?galleryUrls:(created.image?[String(created.image).startsWith('data:image/')?`/api/product-image?id=${created.id}`:created.image]:[]),image:galleryUrls[0]||(String(created.image||'').startsWith('data:image/')?`/api/product-image?id=${created.id}`:created.image)}));
       return res.status(201).json({ok:true,count:products.length,products,product:products[0]});
     }
     if (!allowed(req, 'products.import')) return res.status(403).json({ error: 'Tu rol no tiene permiso para importar productos.' });
@@ -123,7 +131,7 @@ module.exports = async function handler(req, res) {
       return { code:String(p.code||'').trim().slice(0,64), name: name.slice(0,160), category: category.slice(0,80), price, description:String(p.description||'').slice(0,2000), sizes:String(p.sizes||'').slice(0,300), colors:String(p.colors||'').slice(0,300), stock, image:String(p.image||'').slice(0,1500), tag:String(p.tag||'').slice(0,80) };
     });
     const codes=new Set(); for(const p of clean){const key=p.code.toLocaleLowerCase();if(key&&codes.has(key))throw new Error('Hay códigos de producto repetidos en el archivo.');if(key)codes.add(key)}
-    const statements = [sql`DELETE FROM products`, ...clean.map(p => sql`INSERT INTO products (code,name, category, price, description, sizes, colors, stock, image, tag, active) VALUES (${p.code},${p.name},${p.category},${p.price},${p.description},${p.sizes},${p.colors},${p.stock},${p.image},${p.tag},${Boolean(p.image)})` )];
+    const statements = [sql`DELETE FROM products`,sql`DELETE FROM product_gallery`, ...clean.map(p => sql`INSERT INTO products (code,name, category, price, description, sizes, colors, stock, image, tag, active) VALUES (${p.code},${p.name},${p.category},${p.price},${p.description},${p.sizes},${p.colors},${p.stock},${p.image},${p.tag},${Boolean(p.image)})` )];
     await sql.transaction(statements);
     const actor=identity(req)?.email||'usuario';
     await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${actor},'products.import',${`Importó ${clean.length} productos`})`;
