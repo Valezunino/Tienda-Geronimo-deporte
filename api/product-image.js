@@ -5,11 +5,12 @@ function db() {
 }
 module.exports = async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Método no permitido' });
-  const id=Number(req.query?.id);
-  if (!Number.isSafeInteger(id) || id<1) return res.status(400).json({ error: 'Imagen no válida.' });
+  const id=Number(req.query?.id),model=String(req.query?.model||'').slice(0,50),color=String(req.query?.color||'').slice(0,300),index=Number(req.query?.index||0);
+  const galleryRequest=Boolean(model);
+  if ((!galleryRequest&&(!Number.isSafeInteger(id)||id<1))||(galleryRequest&&(!Number.isSafeInteger(index)||index<0||index>5))) return res.status(400).json({ error: 'Imagen no válida.' });
   try {
     const sql=db();
-    const rows=await sql`SELECT image FROM products WHERE id=${id} LIMIT 1`;
+    const rows=galleryRequest?await sql`SELECT image FROM product_gallery WHERE LOWER(model_code)=LOWER(${model}) AND LOWER(color)=LOWER(${color}) ORDER BY sort_order,id OFFSET ${index} LIMIT 1`:await sql`SELECT image FROM products WHERE id=${id} LIMIT 1`;
     const image=String(rows[0]?.image||'');
     const match=image.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);
     if (!match) return res.status(404).json({ error: 'No se encontró la imagen.' });
