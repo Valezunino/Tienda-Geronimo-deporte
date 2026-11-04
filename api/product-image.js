@@ -10,7 +10,7 @@ module.exports = async function handler(req, res) {
   if ((!galleryRequest&&(!Number.isSafeInteger(id)||id<1))||(galleryRequest&&(!Number.isSafeInteger(index)||index<0||index>5))) return res.status(400).json({ error: 'Imagen no válida.' });
   try {
     const sql=db();
-    const rows=galleryRequest?await sql`SELECT image FROM product_gallery WHERE LOWER(model_code)=LOWER(${model}) AND LOWER(color)=LOWER(${color}) ORDER BY sort_order,id OFFSET ${index} LIMIT 1`:await sql`SELECT image FROM products WHERE id=${id} LIMIT 1`;
+    const rows=galleryRequest?await sql`SELECT image FROM product_gallery WHERE LOWER(model_code)=LOWER(${model}) AND LOWER(color)=LOWER(${color}) ORDER BY sort_order,id LIMIT 1 OFFSET ${index}`:await sql`SELECT image FROM products WHERE id=${id} LIMIT 1`;
     const image=String(rows[0]?.image||'');
     const match=image.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);
     if (!match) return res.status(404).json({ error: 'No se encontró la imagen.' });
