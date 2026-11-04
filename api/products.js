@@ -38,19 +38,21 @@ module.exports = async function handler(req, res) {
     if (req.method === 'DELETE') {
       if (!authorized(req)) return res.status(401).json({ error: 'Iniciá sesión para gestionar productos.' });
       if (!allowed(req, 'products.delete')) return res.status(403).json({ error: 'Tu rol no tiene permiso para eliminar productos.' });
-      const id=Number(req.query?.id||req.body?.id),variantOnly=String(req.query?.variantOnly||'')==='1';
+      const id=Number(req.query?.id||req.body?.id),variantOnly=String(req.query?.variantOnly||'')==='1',modelWide=String(req.query?.model||req.body?.model||'')==='1';
       if(!Number.isSafeInteger(id)||id<1)return res.status(400).json({error:'Elegí un producto válido.'});
-      const target=await sql`SELECT code,name,category,price,description,sizes,colors,tag FROM products WHERE id=${id} AND deleted_at IS NULL LIMIT 1`;
+      const target=await sql`SELECT code,model_code,name,category,price,description,sizes,colors,tag FROM products WHERE id=${id} AND deleted_at IS NULL LIMIT 1`;
       if(!target.length)return res.status(404).json({error:'No encontramos ese producto en el catálogo.'});
       const p=target[0];
       const removed=variantOnly
         ? await sql`UPDATE products SET active=FALSE,deleted_at=NOW(),updated_at=NOW() WHERE id=${id} AND deleted_at IS NULL RETURNING id`
-        : await sql`UPDATE products SET active=FALSE,deleted_at=NOW(),updated_at=NOW() WHERE LOWER(name)=LOWER(${p.name}) AND LOWER(category)=LOWER(${p.category}) AND price=${p.price} AND description=${p.description} AND colors=${p.colors} AND tag=${p.tag} AND deleted_at IS NULL RETURNING id`;
+        : modelWide&&p.model_code
+          ? await sql`UPDATE products SET active=FALSE,deleted_at=NOW(),updated_at=NOW() WHERE LOWER(model_code)=LOWER(${p.model_code}) AND deleted_at IS NULL RETURNING id`
+          : await sql`UPDATE products SET active=FALSE,deleted_at=NOW(),updated_at=NOW() WHERE LOWER(name)=LOWER(${p.name}) AND LOWER(category)=LOWER(${p.category}) AND price=${p.price} AND description=${p.description} AND colors=${p.colors} AND tag=${p.tag} AND deleted_at IS NULL RETURNING id`;
       if(!variantOnly)await sql`DELETE FROM product_promotions WHERE LOWER(product_name)=LOWER(${p.name}) AND LOWER(category)=LOWER(${p.category})`;
       const actor=identity(req)?.email||'usuario';
       const detail=variantOnly?p.name+' · '+p.category+' · Talle '+(p.sizes||'único')+' · '+(p.colors||'sin color'):p.name+' · '+p.category+' · '+removed.length+' variante(s)';
       await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${actor},'products.delete',${detail})`;
-      return res.status(200).json({ok:true,count:removed.length,variantOnly});
+      return res.status(200).json({ok:true,count:removed.length,variantOnly,modelWide});
     }
     if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
     if (!authorized(req)) return res.status(401).json({ error: 'Iniciá sesión para gestionar productos.' });
