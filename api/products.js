@@ -15,7 +15,7 @@ async function ensure(sql) {
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE`;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`;
   await sql`UPDATE products SET active=FALSE,updated_at=NOW() WHERE active=TRUE AND BTRIM(image)=''`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS products_code_unique ON products(code) WHERE code<>''`;
+  await sql`DROP INDEX IF EXISTS products_code_unique`;
   await sql`CREATE TABLE IF NOT EXISTS admin_audit(id BIGSERIAL PRIMARY KEY,actor TEXT NOT NULL,action TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',created_at TIMESTAMPTZ DEFAULT NOW())`;
   await sql`CREATE TABLE IF NOT EXISTS product_promotions(id BIGSERIAL PRIMARY KEY,product_name TEXT NOT NULL,category TEXT NOT NULL,offer_price NUMERIC(12,2) NOT NULL,starts_at TIMESTAMPTZ NOT NULL,ends_at TIMESTAMPTZ NOT NULL,actor TEXT NOT NULL DEFAULT '',updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS product_promotions_product_unique ON product_promotions(LOWER(product_name),LOWER(category))`;
@@ -112,9 +112,6 @@ module.exports = async function handler(req, res) {
         if (!['http:','https:'].includes(url.protocol)) return res.status(400).json({error:'La imagen debe usar una URL HTTP o HTTPS.'});
       }
       for(const candidate of rawImages){if(typeof candidate!=='string'||!candidate.startsWith('data:'))return res.status(400).json({error:'Las fotos deben ser archivos JPG, PNG o WebP.'});const match=candidate.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);if(!match)return res.status(400).json({error:'Una de las fotos no es válida.'});const bytes=Buffer.from(match[2],'base64');if(!bytes.length||bytes.length>320*1024)return res.status(413).json({error:'Cada foto optimizada debe pesar hasta 320 KB.'})}
-      const duplicates=[];
-      for(const variant of variants){const found=await sql`SELECT id FROM products WHERE LOWER(code)=LOWER(${variant.code}) LIMIT 1`;if(found.length)duplicates.push(variant.code)}
-      if(duplicates.length) return res.status(409).json({error:`Ya existen estos códigos SKU: ${duplicates.slice(0,5).join(', ')}.`});
       const common={name:name.slice(0,160),category:category.slice(0,80),description:String(p.description||'').slice(0,2000),colors:String(p.colors||'').slice(0,300)};
       const statements=variants.map(variant=>sql`INSERT INTO products (code,model_code,name,category,price,description,sizes,colors,stock,image,tag,active) VALUES (${variant.code},${baseCode},${common.name},${common.category},${price},${common.description},${variant.size},${common.colors},${variant.stock},${image},${''},${Boolean(image)}) RETURNING id,code,model_code,name,category,price,description,sizes,colors,stock,image,tag`);
       const inserted=await sql.transaction(statements);
