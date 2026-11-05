@@ -72,9 +72,10 @@ module.exports = async function handler(req, res) {
         let url;try{url=new URL(image)}catch{return res.status(400).json({error:'La imagen debe tener una URL pública válida.'})}
         if(!['http:','https:'].includes(url.protocol))return res.status(400).json({error:'La imagen debe usar una URL HTTP o HTTPS.'});
       }
-      const target=await sql`SELECT name,category,price,description,colors,tag FROM products WHERE id=${id} LIMIT 1`;
+      const target=await sql`SELECT model_code,name,category,price,description,colors,tag FROM products WHERE id=${id} LIMIT 1`;
       if(!target.length)return res.status(404).json({error:'No encontramos ese producto.'});
       const p=target[0];
+      if(p.model_code&&image.startsWith('data:image/')){const gallery=await sql`SELECT id FROM product_gallery WHERE LOWER(model_code)=LOWER(${p.model_code}) AND LOWER(color)=LOWER(${p.colors||''}) ORDER BY sort_order,id LIMIT 1`;if(gallery.length)await sql`UPDATE product_gallery SET image=${image},sort_order=0 WHERE id=${gallery[0].id}`;else await sql`INSERT INTO product_gallery(model_code,color,image,sort_order) VALUES(${p.model_code},${p.colors||''},${image},0)`}
       const changed=await sql`UPDATE products SET image=${image},active=TRUE,updated_at=NOW() WHERE LOWER(name)=LOWER(${p.name}) AND LOWER(category)=LOWER(${p.category}) AND price=${p.price} AND description=${p.description} AND colors=${p.colors} AND tag=${p.tag} AND deleted_at IS NULL RETURNING id`;
       await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${createActor},'products.update',${'Agregó o actualizó la imagen de '+p.name+' y publicó '+changed.length+' variante(s)'})`;
       return res.status(200).json({ok:true,count:changed.length});
