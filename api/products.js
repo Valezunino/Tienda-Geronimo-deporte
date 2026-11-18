@@ -29,8 +29,8 @@ module.exports = async function handler(req, res) {
       const rows = includeDrafts
         ? await sql`SELECT id, code, model_code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products WHERE deleted_at IS NULL ORDER BY updated_at DESC, id DESC`
         : await sql`SELECT id, code, model_code, name, category, price, description, sizes, colors, stock, image, tag, active FROM products WHERE active=TRUE AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC`;
-      const galleries=await sql`SELECT model_code,color,sort_order FROM product_gallery ORDER BY sort_order,id`;
-      const galleryMap=new Map();for(const g of galleries){const key=`${String(g.model_code).toLocaleLowerCase()}|${String(g.color).toLocaleLowerCase()}`;if(!galleryMap.has(key))galleryMap.set(key,[]);galleryMap.get(key).push(`/api/product-image?model=${encodeURIComponent(g.model_code)}&color=${encodeURIComponent(g.color)}&index=${galleryMap.get(key).length}`)}
+      const galleries=await sql`SELECT model_code,color,sort_order,CASE WHEN image LIKE 'data:image/%' THEN NULL ELSE image END AS image_url FROM product_gallery ORDER BY sort_order,id`;
+      const galleryMap=new Map();for(const g of galleries){const key=`${String(g.model_code).toLocaleLowerCase()}|${String(g.color).toLocaleLowerCase()}`;if(!galleryMap.has(key))galleryMap.set(key,[]);galleryMap.get(key).push(g.image_url&&/^https?:\/\//i.test(g.image_url)?g.image_url:`/api/product-image?model=${encodeURIComponent(g.model_code)}&color=${encodeURIComponent(g.color)}&index=${galleryMap.get(key).length}`)}
       const offers = await sql`SELECT product_name, category, offer_price FROM product_promotions WHERE starts_at <= NOW() AND ends_at >= NOW()`;
       const offerMap = new Map(offers.map(o=>[`${String(o.product_name).toLocaleLowerCase()}|${String(o.category).toLocaleLowerCase()}`,Number(o.offer_price)]));
       return res.status(200).json({ products: rows.map(p=>{const key=`${String(p.model_code||'').toLocaleLowerCase()}|${String(p.colors||'').toLocaleLowerCase()}`,images=galleryMap.get(key)||[];const fallback=String(p.image||'').startsWith('data:image/')?`/api/product-image?id=${p.id}`:p.image;return {...p,images:images.length?images:(fallback?[fallback]:[]),offer_price:offerMap.get(`${String(p.name).toLocaleLowerCase()}|${String(p.category).toLocaleLowerCase()}`)||null,image:fallback}}) });
@@ -57,6 +57,43 @@ module.exports = async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
     if (!authorized(req)) return res.status(401).json({ error: 'Iniciá sesión para gestionar productos.' });
     const createActor=identity(req)?.email||'usuario';
+
+    // Las fotos pertenecen al modelo/color, no a los talles individuales.
+    // Agregar imágenes nunca debe crear filas nuevas en products ni tocar stock.
+    if (req.body?.mode === 'addPhotos') {
+      if (!allowed(req, 'products.edit')) return res.status(403).json({ error: 'Tu rol no tiene permiso para editar productos.' });
+      const id=Number(req.body?.id), incoming=req.body?.images;
+      if (!Number.isSafeInteger(id)||id<1) return res.status(400).json({error:'Elegí un producto válido.'});
+      if (!Array.isArray(incoming)||!incoming.length||incoming.length>6) return res.status(400).json({error:'Seleccioná entre 1 y 6 fotos.'});
+      for(const photo of incoming) {
+        if(typeof photo!=='string'||photo.length>440000) return res.status(413).json({error:'Cada foto optimizada debe pesar hasta 320 KB.'});
+        const match=photo.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);
+        if(!match) return res.status(400).json({error:'Las fotos deben ser JPG, PNG o WebP válidas.'});
+        const bytes=Buffer.from(match[2],'base64');
+        if(!bytes.length||bytes.length>320*1024) return res.status(413).json({error:'Cada foto optimizada debe pesar hasta 320 KB.'});
+      }
+      const ref=await sql`SELECT model_code,colors,name,image FROM products WHERE id=${id} AND deleted_at IS NULL LIMIT 1`;
+      if(!ref.length) return res.status(404).json({error:'No encontramos ese producto.'});
+      const model=String(ref[0].model_code||'').trim();
+      if(!model) return res.status(409).json({error:'Este producto antiguo no tiene código de modelo para almacenar una galería. Consultá antes de volver a cargarlo.'});
+      const requestedColor=req.body.color===undefined?String(ref[0].colors||''):String(req.body.color||'');
+      const variants=await sql`SELECT colors,name,image FROM products WHERE LOWER(model_code)=LOWER(${model}) AND LOWER(colors)=LOWER(${requestedColor}) AND deleted_at IS NULL ORDER BY id LIMIT 1`;
+      if(!variants.length)return res.status(404).json({error:'No encontramos ese color del producto.'});
+      const color=String(variants[0].colors||'');
+      const gallery=await sql`SELECT image FROM product_gallery WHERE LOWER(model_code)=LOWER(${model}) AND LOWER(color)=LOWER(${color}) ORDER BY sort_order,id`;
+      const first=String(variants[0].image||'');
+      const originalPhoto=gallery.length===0&&first?[first]:[];
+      const seen=new Set([...gallery.map(g=>g.image),...originalPhoto]);
+      const additions=[];
+      for(const photo of incoming){if(!seen.has(photo)){additions.push(photo);seen.add(photo)}}
+      if(!additions.length)return res.status(409).json({error:'Esas fotos ya están cargadas en el producto.'});
+      if(gallery.length+originalPhoto.length+additions.length>6)return res.status(409).json({error:'Este color admite hasta 6 fotos. Quitá alguna antes de agregar más.'});
+      const toSave=[...originalPhoto,...additions],start=gallery.length;
+      await sql.transaction(toSave.map((photo,index)=>sql`INSERT INTO product_gallery(model_code,color,image,sort_order) VALUES(${model},${color},${photo},${start+index})`));
+      if(!first){await sql`UPDATE products SET image=${additions[0]},active=TRUE,updated_at=NOW() WHERE LOWER(model_code)=LOWER(${model}) AND LOWER(colors)=LOWER(${color}) AND deleted_at IS NULL`;}
+      await sql`INSERT INTO admin_audit(actor,action,detail) VALUES(${createActor},'products.photos.add',${'Agregó '+additions.length+' foto(s) a '+variants[0].name+' · '+(color||'Sin color')})`;
+      return res.status(200).json({ok:true,added:additions.length,total:gallery.length+toSave.length});
+    }
     if (req.body?.mode === 'update') {
       if (!allowed(req, 'products.edit')) return res.status(403).json({ error: 'Tu rol no tiene permiso para editar productos.' });
       const id=Number(req.body?.id), image=String(req.body?.image||'').trim();
@@ -114,6 +151,8 @@ module.exports = async function handler(req, res) {
       }
       for(const candidate of rawImages){if(typeof candidate!=='string'||!candidate.startsWith('data:'))return res.status(400).json({error:'Las fotos deben ser archivos JPG, PNG o WebP.'});const match=candidate.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/);if(!match)return res.status(400).json({error:'Una de las fotos no es válida.'});const bytes=Buffer.from(match[2],'base64');if(!bytes.length||bytes.length>320*1024)return res.status(413).json({error:'Cada foto optimizada debe pesar hasta 320 KB.'})}
       const common={name:name.slice(0,160),category:category.slice(0,80),description:String(p.description||'').slice(0,2000),colors:String(p.colors||'').slice(0,300)};
+      const existing=await sql`SELECT id FROM products WHERE LOWER(model_code)=LOWER(${baseCode}) AND LOWER(colors)=LOWER(${common.colors}) AND deleted_at IS NULL LIMIT 1`;
+      if(existing.length)return res.status(409).json({error:'Este código y color ya están cargados. Para sumar fotos, usá “Agregar fotos” en Productos cargados; no vuelvas a crear los talles.'});
       const statements=variants.map(variant=>sql`INSERT INTO products (code,model_code,name,category,price,description,sizes,colors,stock,image,tag,active) VALUES (${variant.code},${baseCode},${common.name},${common.category},${price},${common.description},${variant.size},${common.colors},${variant.stock},${image},${''},${Boolean(image)}) RETURNING id,code,model_code,name,category,price,description,sizes,colors,stock,image,tag`);
       const inserted=await sql.transaction(statements);
       if(rawImages.length){await sql`DELETE FROM product_gallery WHERE LOWER(model_code)=LOWER(${baseCode}) AND LOWER(color)=LOWER(${common.colors})`;await sql.transaction(rawImages.map((photo,index)=>sql`INSERT INTO product_gallery(model_code,color,image,sort_order) VALUES(${baseCode},${common.colors},${photo},${index})`))}
